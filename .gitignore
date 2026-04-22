@@ -2,3 +2,8 @@
 .env.*
 !.env.example
 .idea/
+
+# Service-specific env files (contain credentials — never commit)
+services/*.env
+# Track only the templates
+!services/*.env.example
