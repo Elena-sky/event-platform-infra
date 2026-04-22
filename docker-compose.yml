@@ -1,11 +1,27 @@
-# RabbitMQ broker + Prometheus + shared bridge network for gateway, notification, retry-orchestrator, etc.
+# Event platform — production stack (pre-built images from GHCR).
 #
-# Usage: ``docker compose up -d``
-# Copy ``.env.example`` → ``.env``. Management UI: http://localhost:${RABBITMQ_MANAGEMENT_PORT}.
-# Prometheus UI: http://localhost:${PROMETHEUS_PORT}.
+# Usage:
+#   docker compose up -d                                      # start everything (1 replica each)
+#   docker compose up -d --scale notification-service=3      # scale-out notification
+#   docker compose up -d --scale analytics-audit-service=2
+#
+# Before first run:
+#   cp .env.example .env
+#   cp services/notification.env.example      services/notification.env
+#   cp services/analytics-audit.env.example   services/analytics-audit.env
+#   cp services/gateway.env.example           services/gateway.env
+#   cp services/retry-orchestrator.env.example services/retry-orchestrator.env
+#
+# Management UI:  http://localhost:${RABBITMQ_MANAGEMENT_PORT}
+# Prometheus UI:  http://localhost:${PROMETHEUS_PORT}
+# Gateway API:    http://localhost:${GATEWAY_PORT}
 
 services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
   rabbitmq:
+    platform: ${INFRA_PLATFORM:-linux/amd64}
     image: ${RABBITMQ_IMAGE}
     container_name: event-platform-rabbitmq
     env_file:
@@ -29,6 +45,7 @@ services:
       start_period: 40s
 
   prometheus:
+    platform: ${INFRA_PLATFORM:-linux/amd64}
     image: prom/prometheus:v2.51.0
     container_name: event-platform-prometheus
     ports:
@@ -36,6 +53,64 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # ── Application services ──────────────────────────────────────────────────
+  # Boot order: retry-orchestrator first (declares delay topology),
+  # then consumers, then gateway-api last.
+
+  retry-orchestrator-service:
+    image: ghcr.io/elena-sky/event-platform-retry-orchestrator-service:${RETRY_ORCHESTRATOR_VERSION:-0.1.0}
+    env_file:
+      - services/retry-orchestrator.env
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  notification-service:
+    image: ghcr.io/elena-sky/event-platform-notification-service:${NOTIFICATION_VERSION:-0.1.0}
+    env_file:
+      - services/notification.env
+    ports:
+      - "8080"    # health :8080 — random host port per replica
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      retry-orchestrator-service:
+        condition: service_started
+
+  analytics-audit-service:
+    image: ghcr.io/elena-sky/event-platform-analytics-audit-service:${ANALYTICS_AUDIT_VERSION:-0.1.0}
+    env_file:
+      - services/analytics-audit.env
+    ports:
+      - "8010"    # analytics API — random host port per replica
+    volumes:
+      - analytics_audit_data:/app/data
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  gateway-api:
+    image: ghcr.io/elena-sky/event-platform-gateway-api:${GATEWAY_VERSION:-0.1.0}
+    env_file:
+      - services/gateway.env
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
     restart: unless-stopped
     networks:
       - event-platform
@@ -51,3 +126,4 @@ networks:
 volumes:
   rabbitmq_data:
   prometheus_data:
+  analytics_audit_data:

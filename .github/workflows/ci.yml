@@ -7,13 +7,20 @@ on:
     branches: [main, master]
 
 jobs:
-  compose:
+  validate-compose:
+    name: Validate Docker Compose
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare env for compose interpolation
-        run: cp .env.example .env
+      - name: Prepare env files
+        run: |
+          cp .env.example .env
+          cp services/gateway.env.example           services/gateway.env
+          cp services/notification.env.example      services/notification.env
+          cp services/analytics-audit.env.example   services/analytics-audit.env
+          cp services/retry-orchestrator.env.example services/retry-orchestrator.env
+          echo "INFRA_PLATFORM=linux/amd64" >> .env
 
-      - name: Validate Docker Compose
+      - name: Validate docker-compose.yml
         run: docker compose config --quiet
