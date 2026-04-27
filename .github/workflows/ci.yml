@@ -20,7 +20,13 @@ jobs:
           cp services/notification.env.example      services/notification.env
           cp services/analytics-audit.env.example   services/analytics-audit.env
           cp services/retry-orchestrator.env.example services/retry-orchestrator.env
-          echo "INFRA_PLATFORM=linux/amd64" >> .env
+          echo "DOCKER_PLATFORM_INFRA=linux/amd64" >> .env
+          echo "DOCKER_PLATFORM_APP=linux/amd64" >> .env
 
       - name: Validate docker-compose.yml
         run: docker compose config --quiet
+
+      - name: Validate docker-compose.rabbitmq-cluster.yml
+        run: |
+          export COMPOSE_PROJECT_NAME=event-platform-rmq-cluster
+          docker compose -f docker-compose.rabbitmq-cluster.yml config --quiet

@@ -1,0 +1,214 @@
+# Optional 3-node RabbitMQ cluster (HA-style local demo; separate project name
+# to avoid clashing with the default single-broker `docker-compose.yml` volumes
+# and containers).
+#
+# Prerequisite: RABBITMQ_ERLANG_COOKIE in .env (see .env.example). Stop any
+# stack that already binds the same host ports (5672/15672/…).
+#
+#   export COMPOSE_PROJECT_NAME=event-platform-rmq-cluster
+#   docker compose -f docker-compose.rabbitmq-cluster.yml up -d
+#   docker compose -f docker-compose.rabbitmq-cluster.yml down -v
+#
+# (Use COMPOSE_PROJECT_NAME to avoid clashing with the default stack’s volumes
+# and container names. Older Compose releases cannot use the top-level `name`
+# key, so the project is set this way instead.)
+#
+# Applications connect to the seed (DNS) host only: RABBITMQ_HOST=rabbitmq-1
+# (overridden in this file). There is no AMQP load-balancer; production would
+# use multiple addresses or a TCP/LB in front of the cluster.
+
+services:
+
+  # ── RabbitMQ cluster (3 disc nodes) ────────────────────────────────────
+  # Follower nodes: see rabbitmq/cluster-node-follower.sh
+  # (join once; marker in volume; bash /dev/tcp wait for seed).
+
+  rabbitmq-1:
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
+    image: ${RABBITMQ_IMAGE}
+    hostname: rabbitmq-1
+    env_file:
+      - .env
+    command: >
+      sh -c "rabbitmq-plugins enable rabbitmq_prometheus && exec rabbitmq-server"
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+      - "${RABBITMQ_PROMETHEUS_PORT:-15692}:15692"
+    volumes:
+      - rmq1_data:/var/lib/rabbitmq
+    restart: unless-stopped
+    networks:
+      - event-platform
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  rabbitmq-2:
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
+    image: ${RABBITMQ_IMAGE}
+    hostname: rabbitmq-2
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_SEED_NODENAME: rabbit@rabbitmq-1
+    command: ["/bin/bash", "/opt/cluster-node-follower.sh"]
+    volumes:
+      - rmq2_data:/var/lib/rabbitmq
+      - ./rabbitmq/cluster-node-follower.sh:/opt/cluster-node-follower.sh:ro
+    restart: unless-stopped
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+    networks:
+      - event-platform
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 150s
+
+  rabbitmq-3:
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
+    image: ${RABBITMQ_IMAGE}
+    hostname: rabbitmq-3
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_SEED_NODENAME: rabbit@rabbitmq-1
+    command: ["/bin/bash", "/opt/cluster-node-follower.sh"]
+    volumes:
+      - rmq3_data:/var/lib/rabbitmq
+      - ./rabbitmq/cluster-node-follower.sh:/opt/cluster-node-follower.sh:ro
+    restart: unless-stopped
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+    networks:
+      - event-platform
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 150s
+
+  # ── Prometheus (scrapes all three nodes) ────────────────────────────────
+  prometheus:
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus.cluster.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_cluster_data:/prometheus
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+      rabbitmq-2:
+        condition: service_healthy
+      rabbitmq-3:
+        condition: service_healthy
+
+  # ── Application services (RABBITMQ_HOST → rabbitmq-1) ───────────────────
+  retry-orchestrator-service:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
+    image: ghcr.io/elena-sky/event-platform-retry-orchestrator-service:${RETRY_ORCHESTRATOR_VERSION:-0.1.0}
+    env_file:
+      - services/retry-orchestrator.env
+    environment:
+      RABBITMQ_HOST: rabbitmq-1
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+      rabbitmq-2:
+        condition: service_healthy
+      rabbitmq-3:
+        condition: service_healthy
+
+  notification-service:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
+    image: ghcr.io/elena-sky/event-platform-notification-service:${NOTIFICATION_VERSION:-0.1.0}
+    env_file:
+      - services/notification.env
+    environment:
+      RABBITMQ_HOST: rabbitmq-1
+    ports:
+      - "8080"
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+      rabbitmq-2:
+        condition: service_healthy
+      rabbitmq-3:
+        condition: service_healthy
+      retry-orchestrator-service:
+        condition: service_started
+
+  analytics-audit-service:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
+    image: ghcr.io/elena-sky/event-platform-analytics-audit-service:${ANALYTICS_AUDIT_VERSION:-0.1.0}
+    env_file:
+      - services/analytics-audit.env
+    environment:
+      RABBITMQ_HOST: rabbitmq-1
+    ports:
+      - "8010"
+    volumes:
+      - analytics_audit_data:/app/data
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+      rabbitmq-2:
+        condition: service_healthy
+      rabbitmq-3:
+        condition: service_healthy
+
+  gateway-api:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
+    image: ghcr.io/elena-sky/event-platform-gateway-api:${GATEWAY_VERSION:-0.1.0}
+    env_file:
+      - services/gateway.env
+    environment:
+      RABBITMQ_HOST: rabbitmq-1
+      RABBITMQ_HTTP_API_URL: http://rabbitmq-1:15672
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    restart: unless-stopped
+    networks:
+      - event-platform
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy
+      rabbitmq-2:
+        condition: service_healthy
+      rabbitmq-3:
+        condition: service_healthy
+
+networks:
+  event-platform:
+    name: ${EVENT_PLATFORM_NETWORK_NAME}
+    driver: bridge
+
+volumes:
+  rmq1_data:
+  rmq2_data:
+  rmq3_data:
+  prometheus_cluster_data:
+  analytics_audit_data:
