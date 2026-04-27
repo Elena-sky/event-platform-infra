@@ -1,0 +1,14 @@
+# Prometheus scrape for the 3-node RabbitMQ stack
+# (docker-compose.rabbitmq-cluster.yml)
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: rabbitmq
+    static_configs:
+      - targets:
+          - rabbitmq-1:15692
+          - rabbitmq-2:15692
+          - rabbitmq-3:15692
+    metrics_path: /metrics

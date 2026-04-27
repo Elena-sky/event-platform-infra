@@ -21,7 +21,7 @@ services:
   # ── Infrastructure ────────────────────────────────────────────────────────
 
   rabbitmq:
-    platform: ${INFRA_PLATFORM:-linux/amd64}
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
     image: ${RABBITMQ_IMAGE}
     container_name: event-platform-rabbitmq
     env_file:
@@ -45,7 +45,7 @@ services:
       start_period: 40s
 
   prometheus:
-    platform: ${INFRA_PLATFORM:-linux/amd64}
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
     image: prom/prometheus:v2.51.0
     container_name: event-platform-prometheus
     ports:
@@ -65,6 +65,7 @@ services:
   # then consumers, then gateway-api last.
 
   retry-orchestrator-service:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
     image: ghcr.io/elena-sky/event-platform-retry-orchestrator-service:${RETRY_ORCHESTRATOR_VERSION:-0.1.0}
     env_file:
       - services/retry-orchestrator.env
@@ -76,6 +77,7 @@ services:
         condition: service_healthy
 
   notification-service:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
     image: ghcr.io/elena-sky/event-platform-notification-service:${NOTIFICATION_VERSION:-0.1.0}
     env_file:
       - services/notification.env
@@ -91,6 +93,7 @@ services:
         condition: service_started
 
   analytics-audit-service:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
     image: ghcr.io/elena-sky/event-platform-analytics-audit-service:${ANALYTICS_AUDIT_VERSION:-0.1.0}
     env_file:
       - services/analytics-audit.env
@@ -106,6 +109,7 @@ services:
         condition: service_healthy
 
   gateway-api:
+    platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
     image: ghcr.io/elena-sky/event-platform-gateway-api:${GATEWAY_VERSION:-0.1.0}
     env_file:
       - services/gateway.env
