@@ -60,6 +60,24 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  redis:
+    platform: ${DOCKER_PLATFORM_INFRA:-linux/amd64}
+    image: redis:7.2-alpine
+    container_name: event-platform-redis
+    ports:
+      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - event-platform
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Application services ──────────────────────────────────────────────────
   # Boot order: retry-orchestrator first (declares delay topology),
   # then consumers, then gateway-api last.
@@ -81,6 +99,10 @@ services:
     image: ghcr.io/elena-sky/event-platform-notification-service:${NOTIFICATION_VERSION:-0.1.0}
     env_file:
       - services/notification.env
+    environment:
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      IDEMPOTENCY_TTL_SECONDS: ${IDEMPOTENCY_TTL_SECONDS:-86400}
     ports:
       - "8080"    # health :8080 — random host port per replica
     restart: unless-stopped
@@ -91,12 +113,18 @@ services:
         condition: service_healthy
       retry-orchestrator-service:
         condition: service_started
+      redis:
+        condition: service_healthy
 
   analytics-audit-service:
     platform: ${DOCKER_PLATFORM_APP:-linux/amd64}
     image: ghcr.io/elena-sky/event-platform-analytics-audit-service:${ANALYTICS_AUDIT_VERSION:-0.1.0}
     env_file:
       - services/analytics-audit.env
+    environment:
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      IDEMPOTENCY_TTL_SECONDS: ${IDEMPOTENCY_TTL_SECONDS:-86400}
     ports:
       - "8010"    # analytics API — random host port per replica
     volumes:
@@ -106,6 +134,8 @@ services:
       - event-platform
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   gateway-api:
@@ -131,3 +161,4 @@ volumes:
   rabbitmq_data:
   prometheus_data:
   analytics_audit_data:
+  redis_data:
